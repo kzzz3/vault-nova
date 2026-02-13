@@ -20,7 +20,7 @@ Vault Nova is a local-first password manager written in Rust.
 cargo run
 ```
 
-The app opens as a desktop window.
+The desktop app opens as a native window (`vault-nova` binary).
 
 On first launch, set your master password.
 
@@ -29,25 +29,43 @@ The app can also be summoned from the tray icon quickly.
 You can also initialize from CLI first:
 
 ```bash
-cargo run -- init
+cargo run --bin vault-cli -- init
 ```
 
 ## CLI Commands
 
 ```bash
-cargo run -- --help
+cargo run --bin vault-cli -- --help
 ```
 
 Common examples:
 
 ```bash
-cargo run -- add github alice
-cargo run -- get github --username alice --show-password
-cargo run -- list
-cargo run -- delete github --username alice
-cargo run -- generate --length 24
-cargo run -- desktop
+cargo run --bin vault-cli -- add github alice
+cargo run --bin vault-cli -- get github --username alice --show-password
+cargo run --bin vault-cli -- list
+cargo run --bin vault-cli -- delete github --username alice
+cargo run --bin vault-cli -- generate --length 24
 ```
+
+## Build and Package
+
+Release binaries:
+
+```bash
+cargo build --release
+```
+
+- Desktop GUI binary (no console window in release): `target/release/vault-nova.exe`
+- CLI binary: `target/release/vault-cli.exe`
+
+Build Windows installer package (Tauri bundle):
+
+```bash
+cargo tauri build
+```
+
+Installer artifacts are generated under `target/release/bundle/` (for example `msi` or `nsis`, depending on your setup).
 
 ## Desktop Shortcuts
 

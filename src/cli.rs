@@ -1,35 +1,29 @@
-mod app_core;
-mod desktop;
-mod desktop_prefs;
-mod password;
-mod vault;
-
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use rpassword::prompt_password;
-use vault::Entry;
 use zeroize::Zeroize;
+
+use crate::password;
+use crate::vault::{self, Entry};
 
 #[derive(Parser)]
 #[command(
-    name = "vault-nova",
+    name = "vault-cli",
     version,
-    about = "A local encrypted password manager written in Rust"
+    about = "CLI for the local encrypted Vault Nova password manager"
 )]
 struct Cli {
     #[arg(long, global = true, default_value = "vault.json")]
     vault: PathBuf,
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Open the desktop app (default behavior)
-    Desktop,
     /// Initialize a new encrypted vault
     Init,
     /// Add or update an entry
@@ -80,24 +74,16 @@ struct GenerateArgs {
     no_symbols: bool,
 }
 
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("Error: {error:#}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<()> {
+pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        None | Some(Command::Desktop) => desktop::run(cli.vault),
-        Some(Command::Init) => init_vault(&cli.vault),
-        Some(Command::Add(args)) => add_entry(&cli.vault, args),
-        Some(Command::Get(args)) => get_entry(&cli.vault, args),
-        Some(Command::List) => list_entries(&cli.vault),
-        Some(Command::Delete(args)) => delete_entry(&cli.vault, args),
-        Some(Command::Generate(args)) => {
+        Command::Init => init_vault(&cli.vault),
+        Command::Add(args) => add_entry(&cli.vault, args),
+        Command::Get(args) => get_entry(&cli.vault, args),
+        Command::List => list_entries(&cli.vault),
+        Command::Delete(args) => delete_entry(&cli.vault, args),
+        Command::Generate(args) => {
             let generated =
                 password::generate_password(args.length, !args.no_numbers, !args.no_symbols)?;
             println!("{generated}");

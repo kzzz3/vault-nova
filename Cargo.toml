@@ -2,6 +2,7 @@
 name = "vault-nova"
 version = "0.1.0"
 edition = "2024"
+default-run = "vault-nova"
 
 [dependencies]
 aes-gcm = "0.10"
@@ -22,4 +23,4 @@ zeroize = "1"
 tempfile = "3"
 
 [build-dependencies]
-tauri-build = { version = "2" }
+tauri-build = { version = "2", features = [] }
