@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vault Nova</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+    <span class="orb orb-c"></span>
+  </div>
+
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <h1>Vault Nova</h1>
+        <p>离线优先 · 本地加密 · 桌面端体验</p>
+      </div>
+      <span id="session-pill" class="session-pill">未解锁</span>
+    </header>
+
+    <section id="auth-panel" class="auth-panel hidden">
+      <h2 id="auth-title">解锁保险库</h2>
+      <p id="auth-tip">输入主密码以访问你的密码库。</p>
+      <form id="auth-form" class="form-grid">
+        <label>
+          主密码
+          <input id="master-password" type="password" autocomplete="current-password" required />
+        </label>
+        <label id="confirm-wrap" class="hidden">
+          确认主密码
+          <input id="confirm-password" type="password" autocomplete="new-password" />
+        </label>
+        <button id="auth-submit" class="btn btn-main" type="submit">解锁</button>
+      </form>
+      <p id="auth-status" class="status"></p>
+    </section>
+
+    <section id="app-panel" class="app-panel hidden">
+      <aside class="sidebar card">
+        <label>
+          搜索
+          <input id="search-input" type="text" placeholder="服务名 / 用户名" />
+        </label>
+        <div class="toolbar">
+          <button id="new-btn" class="btn btn-main" type="button">新建条目</button>
+          <button id="refresh-btn" class="btn btn-ghost" type="button">刷新</button>
+          <button id="settings-btn" class="btn btn-ghost" type="button">设置</button>
+        </div>
+        <div id="entry-list" class="entry-list"></div>
+      </aside>
+
+      <section class="editor card">
+        <div class="editor-main">
+          <div class="field-row field-row-main">
+            <label>
+              服务名
+              <input id="service-input" type="text" />
+            </label>
+            <label>
+              用户名
+              <input id="username-input" type="text" />
+            </label>
+            <label class="password-wrap">
+              密码
+              <div class="password-field">
+                <input id="password-input" type="password" />
+                <button id="password-visibility-btn" class="password-visibility-btn" type="button" aria-label="显示密码" title="显示密码">👁</button>
+              </div>
+            </label>
+          </div>
+
+          <label class="notes-wrap">
+            备注
+            <textarea id="notes-input" placeholder="备注: 恢复邮箱、MFA 信息、提示等"></textarea>
+          </label>
+
+          <div class="field-row compact">
+            <label>
+              生成长度
+              <input id="length-input" type="number" min="8" max="128" value="16" />
+            </label>
+            <label>
+              类型
+              <select id="type-select">
+                <option value="letters_numbers_symbols" selected>字母 + 数字 + 符号</option>
+                <option value="letters_numbers">字母 + 数字</option>
+                <option value="letters_only">仅字母</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="toolbar">
+            <button id="save-btn" class="btn btn-main" type="button">保存条目</button>
+            <button id="delete-btn" class="btn btn-danger" type="button">删除当前</button>
+            <button id="generate-btn" class="btn btn-alt" type="button">生成密码</button>
+          </div>
+        </div>
+
+        <p id="entry-meta" class="meta">未选择条目</p>
+        <p id="app-status" class="status"></p>
+      </section>
+    </section>
+  </main>
+
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-card">
+      <h3 id="settings-title">设置</h3>
+      <label>
+        自动锁定时间 (分钟)
+        <input id="auto-lock-input" type="number" min="1" max="120" value="5" />
+      </label>
+      <label>
+        全局唤起快捷键
+        <div class="shortcut-row">
+          <input id="global-shortcut-input" type="text" value="Ctrl+Shift+Q" readonly />
+          <button id="capture-shortcut-btn" class="btn btn-ghost" type="button">按键录制</button>
+        </div>
+      </label>
+      <label class="toggle-item">
+        <input id="always-on-top-toggle" type="checkbox" />
+        始终置顶窗口
+      </label>
+      <label class="toggle-item">
+        <input id="launch-at-startup-toggle" type="checkbox" />
+        开机启动 Vault Nova
+      </label>
+      <p class="meta">说明: 隐藏窗口后 1 分钟内可免登录恢复，超过 1 分钟或会话超时后需要重新登录。</p>
+      <div class="toolbar">
+        <button id="save-settings-btn" class="btn btn-main" type="button">保存设置</button>
+        <button id="cancel-settings-btn" class="btn btn-ghost" type="button">关闭</button>
+      </div>
+      <p id="settings-status" class="status"></p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

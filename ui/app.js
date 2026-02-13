@@ -1,0 +1,510 @@
+const tauriApi = window.__TAURI__;
+
+if (!tauriApi || !tauriApi.core || typeof tauriApi.core.invoke !== "function") {
+  document.body.innerHTML = "<main style='padding:24px;font-family:Segoe UI,sans-serif;'>无法连接 Tauri API。请使用桌面客户端启动。</main>";
+  throw new Error("Tauri API not available");
+}
+
+const invoke = tauriApi.core.invoke;
+
+let initialized = false;
+let entries = [];
+let selectedKey = "";
+let desktopPrefs = {
+  always_on_top: false,
+  auto_lock_minutes: 5,
+  global_toggle_shortcut: "Ctrl+Shift+Q",
+  launch_at_startup: false,
+};
+let capturingShortcut = false;
+let sessionDeadlineMs = null;
+
+const authPanel = document.getElementById("auth-panel");
+const appPanel = document.getElementById("app-panel");
+const sessionPill = document.getElementById("session-pill");
+const authTitle = document.getElementById("auth-title");
+const authTip = document.getElementById("auth-tip");
+const authSubmit = document.getElementById("auth-submit");
+const confirmWrap = document.getElementById("confirm-wrap");
+const authStatus = document.getElementById("auth-status");
+const appStatus = document.getElementById("app-status");
+const entryMeta = document.getElementById("entry-meta");
+
+const masterPasswordInput = document.getElementById("master-password");
+const confirmPasswordInput = document.getElementById("confirm-password");
+const searchInput = document.getElementById("search-input");
+const serviceInput = document.getElementById("service-input");
+const usernameInput = document.getElementById("username-input");
+const passwordInput = document.getElementById("password-input");
+const passwordVisibilityBtn = document.getElementById("password-visibility-btn");
+const notesInput = document.getElementById("notes-input");
+const entryList = document.getElementById("entry-list");
+const lengthInput = document.getElementById("length-input");
+const typeSelect = document.getElementById("type-select");
+
+const settingsModal = document.getElementById("settings-modal");
+const settingsStatus = document.getElementById("settings-status");
+const autoLockInput = document.getElementById("auto-lock-input");
+const globalShortcutInput = document.getElementById("global-shortcut-input");
+const captureShortcutBtn = document.getElementById("capture-shortcut-btn");
+const launchAtStartupToggle = document.getElementById("launch-at-startup-toggle");
+const alwaysOnTopToggle = document.getElementById("always-on-top-toggle");
+
+function setStatus(target, message, level = "") {
+  target.textContent = message || "";
+  target.className = "status" + (level ? ` ${level}` : "");
+}
+
+function normalizeError(error) {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error.message === "string") {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch (_) {
+    return "操作失败";
+  }
+}
+
+async function call(command, payload = {}) {
+  try {
+    return await invoke(command, payload);
+  } catch (error) {
+    throw new Error(normalizeError(error));
+  }
+}
+
+function keyOf(entry) {
+  return `${entry.service}::${entry.username}`;
+}
+
+function showAuthMode() {
+  appPanel.classList.add("hidden");
+  authPanel.classList.remove("hidden");
+  masterPasswordInput.value = "";
+  confirmPasswordInput.value = "";
+  selectedKey = "";
+
+  if (initialized) {
+    authTitle.textContent = "解锁保险库";
+    authTip.textContent = "输入主密码以访问你的密码库。";
+    confirmWrap.classList.add("hidden");
+    authSubmit.textContent = "解锁";
+  } else {
+    authTitle.textContent = "初始化保险库";
+    authTip.textContent = "首次使用请设置主密码，之后每次进入都需要主密码。";
+    confirmWrap.classList.remove("hidden");
+    authSubmit.textContent = "创建并解锁";
+  }
+}
+
+function showAppMode() {
+  authPanel.classList.add("hidden");
+  appPanel.classList.remove("hidden");
+}
+
+function clearForm() {
+  serviceInput.value = "";
+  usernameInput.value = "";
+  passwordInput.value = "";
+  notesInput.value = "";
+  selectedKey = "";
+  passwordInput.type = "password";
+  passwordVisibilityBtn.textContent = "👁";
+  passwordVisibilityBtn.setAttribute("aria-label", "显示密码");
+  passwordVisibilityBtn.setAttribute("title", "显示密码");
+  entryMeta.textContent = "新建条目";
+}
+
+function renderEntries() {
+  const q = searchInput.value.trim().toLowerCase();
+  const filtered = entries.filter((entry) => {
+    if (!q) {
+      return true;
+    }
+    return entry.service.toLowerCase().includes(q) || entry.username.toLowerCase().includes(q);
+  });
+
+  entryList.innerHTML = "";
+  if (!filtered.length) {
+    entryList.innerHTML = '<p class="meta">没有匹配条目</p>';
+    return;
+  }
+
+  filtered.forEach((entry) => {
+    const item = document.createElement("article");
+    item.className = "entry-item";
+    if (selectedKey === keyOf(entry)) {
+      item.classList.add("active");
+    }
+
+    const service = document.createElement("p");
+    service.className = "entry-service";
+    service.textContent = entry.service;
+
+    const username = document.createElement("p");
+    username.className = "entry-user";
+    username.textContent = entry.username;
+
+    item.appendChild(service);
+    item.appendChild(username);
+    item.addEventListener("click", () => {
+      selectedKey = keyOf(entry);
+      serviceInput.value = entry.service;
+      usernameInput.value = entry.username;
+      passwordInput.value = entry.password;
+      notesInput.value = entry.notes || "";
+      passwordInput.type = "password";
+      passwordVisibilityBtn.textContent = "👁";
+      passwordVisibilityBtn.setAttribute("aria-label", "显示密码");
+      passwordVisibilityBtn.setAttribute("title", "显示密码");
+
+      const date = new Date(entry.updated_at * 1000);
+      entryMeta.textContent = `上次更新: ${date.toLocaleString()}`;
+      renderEntries();
+    });
+
+    entryList.appendChild(item);
+  });
+}
+
+function updateSessionPill(status) {
+  if (!status.unlocked) {
+    sessionPill.textContent = initialized ? "未解锁" : "待初始化";
+    sessionDeadlineMs = null;
+    return;
+  }
+
+  if (typeof status.expires_in_seconds === "number") {
+    const mins = Math.max(1, Math.ceil(status.expires_in_seconds / 60));
+    sessionPill.textContent = `已解锁 · 剩余约 ${mins} 分钟`;
+    sessionDeadlineMs = Date.now() + status.expires_in_seconds * 1000;
+  } else {
+    sessionPill.textContent = "已解锁";
+    sessionDeadlineMs = null;
+  }
+}
+
+async function refreshStatus() {
+  const status = await call("get_app_status");
+  initialized = !!status.initialized;
+  updateSessionPill(status);
+  return status;
+}
+
+async function refreshDesktopPrefs() {
+  const prefs = await call("get_desktop_preferences");
+  desktopPrefs = Object.assign({}, desktopPrefs, prefs || {});
+
+  autoLockInput.value = String(desktopPrefs.auto_lock_minutes || 5);
+  globalShortcutInput.value = desktopPrefs.global_toggle_shortcut || "Ctrl+Shift+Q";
+  launchAtStartupToggle.checked = !!desktopPrefs.launch_at_startup;
+  alwaysOnTopToggle.checked = !!desktopPrefs.always_on_top;
+
+  if (desktopPrefs.global_shortcut_registered === false && desktopPrefs.global_shortcut_error) {
+    setStatus(settingsStatus, desktopPrefs.global_shortcut_error, "error");
+  }
+  return desktopPrefs;
+}
+
+function openSettingsModal() {
+  settingsModal.classList.remove("hidden");
+  setStatus(settingsStatus, "", "");
+}
+
+function closeSettingsModal() {
+  settingsModal.classList.add("hidden");
+  capturingShortcut = false;
+  captureShortcutBtn.textContent = "按键录制";
+}
+
+function eventToShortcut(event) {
+  const ignored = ["Control", "Shift", "Alt", "Meta"];
+  if (ignored.includes(event.key)) {
+    return "";
+  }
+
+  const parts = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push("Meta");
+
+  if (!parts.length) {
+    return "";
+  }
+
+  const key = event.key.length === 1 ? event.key.toUpperCase() : event.key;
+  parts.push(key);
+  return parts.join("+");
+}
+
+async function loadEntries() {
+  const data = await call("list_entries");
+  entries = data.entries || [];
+  entries.sort((a, b) => a.service.localeCompare(b.service) || a.username.localeCompare(b.username));
+  renderEntries();
+}
+
+async function onAuthSubmit(event) {
+  event.preventDefault();
+  setStatus(authStatus, "", "");
+
+  const masterPassword = masterPasswordInput.value;
+  if (!masterPassword) {
+    setStatus(authStatus, "主密码不能为空", "error");
+    return;
+  }
+
+  try {
+    if (initialized) {
+      await call("unlock_vault", { masterPassword });
+    } else {
+      await call("setup_vault", {
+        masterPassword,
+        confirmPassword: confirmPasswordInput.value,
+      });
+      initialized = true;
+    }
+
+    showAppMode();
+    clearForm();
+    await loadEntries();
+    await refreshDesktopPrefs();
+    await refreshStatus();
+    setStatus(appStatus, "保险库已解锁", "ok");
+  } catch (error) {
+    setStatus(authStatus, error.message, "error");
+  }
+}
+
+async function saveEntry() {
+  const payload = {
+    service: serviceInput.value.trim(),
+    username: usernameInput.value.trim(),
+    password: passwordInput.value,
+    notes: notesInput.value.trim() || null,
+  };
+
+  if (!payload.service || !payload.username || !payload.password) {
+    setStatus(appStatus, "服务名、用户名和密码为必填项", "error");
+    return;
+  }
+
+  try {
+    await call("upsert_entry", { payload });
+    await loadEntries();
+    clearForm();
+    renderEntries();
+    setStatus(appStatus, "条目已保存，已切换到新建", "ok");
+  } catch (error) {
+    setStatus(appStatus, error.message, "error");
+    if (error.message.includes("locked") || error.message.includes("expired")) {
+      showAuthMode();
+    }
+  }
+}
+
+async function deleteEntry() {
+  const service = serviceInput.value.trim();
+  const username = usernameInput.value.trim();
+
+  if (!service || !username) {
+    setStatus(appStatus, "删除前请先选择一个条目", "error");
+    return;
+  }
+
+  try {
+    await call("delete_entry", { payload: { service, username } });
+    await loadEntries();
+    clearForm();
+    setStatus(appStatus, "条目已删除", "ok");
+  } catch (error) {
+    setStatus(appStatus, error.message, "error");
+  }
+}
+
+async function generatePassword() {
+  const length = Number(lengthInput.value || 16);
+  if (!Number.isFinite(length) || length < 8 || length > 128) {
+    setStatus(appStatus, "长度必须在 8 到 128 之间", "error");
+    return;
+  }
+
+  const type = typeSelect.value;
+  const includeNumbers = type !== "letters_only";
+  const includeSymbols = type === "letters_numbers_symbols";
+
+  try {
+    const data = await call("generate_password", {
+      length,
+      includeNumbers,
+      includeSymbols,
+    });
+    passwordInput.value = data.password;
+    setStatus(appStatus, "已生成新密码", "ok");
+  } catch (error) {
+    setStatus(appStatus, error.message, "error");
+  }
+}
+
+async function saveSettings() {
+  setStatus(settingsStatus, "", "");
+
+  const autoLockMinutes = Number(autoLockInput.value || 5);
+  const globalToggleShortcut = (globalShortcutInput.value || "").trim();
+  if (!Number.isFinite(autoLockMinutes) || autoLockMinutes < 1 || autoLockMinutes > 120) {
+    setStatus(settingsStatus, "自动锁定时间需在 1 到 120 分钟", "error");
+    return;
+  }
+  if (!globalToggleShortcut) {
+    setStatus(settingsStatus, "全局快捷键不能为空", "error");
+    return;
+  }
+
+  try {
+    const prefs = await call("set_desktop_preferences", {
+      payload: {
+        always_on_top: !!alwaysOnTopToggle.checked,
+        auto_lock_minutes: autoLockMinutes,
+        global_toggle_shortcut: globalToggleShortcut,
+        launch_at_startup: !!launchAtStartupToggle.checked,
+      },
+    });
+    desktopPrefs = Object.assign({}, desktopPrefs, prefs);
+    if (prefs.global_shortcut_registered === false && prefs.global_shortcut_error) {
+      setStatus(settingsStatus, prefs.global_shortcut_error, "error");
+    } else {
+      setStatus(settingsStatus, "设置已保存", "ok");
+    }
+  } catch (error) {
+    setStatus(settingsStatus, error.message, "error");
+  }
+}
+
+async function boot() {
+  try {
+    await refreshDesktopPrefs();
+    const status = await refreshStatus();
+    if (status.unlocked) {
+      showAppMode();
+      clearForm();
+      await loadEntries();
+      setStatus(appStatus, "会话仍有效，已自动进入", "ok");
+    } else {
+      showAuthMode();
+    }
+  } catch (error) {
+    showAuthMode();
+    setStatus(authStatus, error.message, "error");
+  }
+}
+
+document.getElementById("auth-form").addEventListener("submit", onAuthSubmit);
+
+document.getElementById("save-btn").addEventListener("click", saveEntry);
+document.getElementById("new-btn").addEventListener("click", () => {
+  clearForm();
+  setStatus(appStatus, "已切换为新建模式", "ok");
+});
+document.getElementById("delete-btn").addEventListener("click", deleteEntry);
+document.getElementById("generate-btn").addEventListener("click", generatePassword);
+
+passwordVisibilityBtn.addEventListener("click", () => {
+  const isHidden = passwordInput.type === "password";
+  passwordInput.type = isHidden ? "text" : "password";
+  passwordVisibilityBtn.textContent = isHidden ? "🙈" : "👁";
+  passwordVisibilityBtn.setAttribute("aria-label", isHidden ? "隐藏密码" : "显示密码");
+  passwordVisibilityBtn.setAttribute("title", isHidden ? "隐藏密码" : "显示密码");
+});
+
+document.getElementById("refresh-btn").addEventListener("click", async () => {
+  try {
+    await loadEntries();
+    setStatus(appStatus, "条目已刷新", "ok");
+  } catch (error) {
+    setStatus(appStatus, error.message, "error");
+  }
+});
+
+document.getElementById("settings-btn").addEventListener("click", openSettingsModal);
+document.getElementById("save-settings-btn").addEventListener("click", saveSettings);
+document.getElementById("cancel-settings-btn").addEventListener("click", closeSettingsModal);
+captureShortcutBtn.addEventListener("click", () => {
+  capturingShortcut = !capturingShortcut;
+  captureShortcutBtn.textContent = capturingShortcut ? "按下快捷键..." : "按键录制";
+  setStatus(settingsStatus, capturingShortcut ? "请按下组合键（例如 Ctrl+Alt+V）" : "", "");
+});
+
+settingsModal.addEventListener("click", (event) => {
+  if (event.target === settingsModal) {
+    closeSettingsModal();
+  }
+});
+
+searchInput.addEventListener("input", renderEntries);
+
+document.addEventListener("keydown", (event) => {
+  if (capturingShortcut && !settingsModal.classList.contains("hidden")) {
+    event.preventDefault();
+    if (event.key === "Escape") {
+      capturingShortcut = false;
+      captureShortcutBtn.textContent = "按键录制";
+      setStatus(settingsStatus, "已取消按键录制", "");
+      return;
+    }
+    const shortcut = eventToShortcut(event);
+    if (shortcut) {
+      globalShortcutInput.value = shortcut;
+      capturingShortcut = false;
+      captureShortcutBtn.textContent = "按键录制";
+      setStatus(settingsStatus, `已录制: ${shortcut}`, "ok");
+    }
+    return;
+  }
+
+  if (event.key === "Escape" && !settingsModal.classList.contains("hidden")) {
+    closeSettingsModal();
+    return;
+  }
+
+  if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
+    const key = event.key.toLowerCase();
+    if (key === "s") {
+      event.preventDefault();
+      saveEntry();
+    }
+  }
+});
+
+setInterval(async () => {
+  try {
+    const status = await refreshStatus();
+    if (!status.unlocked && !appPanel.classList.contains("hidden")) {
+      showAuthMode();
+    }
+  } catch (_) {
+  }
+}, 5000);
+
+setInterval(() => {
+  if (!appPanel.classList.contains("hidden") && sessionDeadlineMs && Date.now() >= sessionDeadlineMs) {
+    showAuthMode();
+    sessionDeadlineMs = null;
+  }
+}, 1000);
+
+window.addEventListener("focus", async () => {
+  try {
+    const status = await refreshStatus();
+    if (!status.unlocked && !appPanel.classList.contains("hidden")) {
+      showAuthMode();
+    }
+  } catch (_) {
+  }
+});
+
+boot();
