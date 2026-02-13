@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct DesktopPreferences {
     pub always_on_top: bool,
     pub auto_lock_minutes: u64,
+    pub hide_grace_minutes: u64,
     pub global_toggle_shortcut: String,
     pub launch_at_startup: bool,
 }
@@ -16,8 +17,9 @@ pub struct DesktopPreferences {
 impl Default for DesktopPreferences {
     fn default() -> Self {
         Self {
-            always_on_top: true,
+            always_on_top: false,
             auto_lock_minutes: 5,
+            hide_grace_minutes: 1,
             global_toggle_shortcut: "Ctrl+Shift+Q".to_string(),
             launch_at_startup: false,
         }
@@ -58,7 +60,7 @@ pub fn save(path: &Path, preferences: &DesktopPreferences) -> Result<()> {
 mod tests {
     use tempfile::tempdir;
 
-    use super::{DesktopPreferences, load, save};
+    use super::{load, save, DesktopPreferences};
 
     #[test]
     fn load_defaults_when_file_missing() {
@@ -77,6 +79,7 @@ mod tests {
         let prefs = DesktopPreferences {
             always_on_top: true,
             auto_lock_minutes: 15,
+            hide_grace_minutes: 2,
             global_toggle_shortcut: "Ctrl+Alt+V".to_string(),
             launch_at_startup: true,
         };

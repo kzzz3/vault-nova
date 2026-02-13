@@ -13,6 +13,7 @@ let selectedKey = "";
 let desktopPrefs = {
   always_on_top: false,
   auto_lock_minutes: 5,
+  hide_grace_minutes: 1,
   global_toggle_shortcut: "Ctrl+Shift+Q",
   launch_at_startup: false,
 };
@@ -41,18 +42,46 @@ const notesInput = document.getElementById("notes-input");
 const entryList = document.getElementById("entry-list");
 const lengthInput = document.getElementById("length-input");
 const typeSelect = document.getElementById("type-select");
+const newBtn = document.getElementById("new-btn");
+const saveBtn = document.getElementById("save-btn");
+const revertBtn = document.getElementById("revert-btn");
+const deleteBtn = document.getElementById("delete-btn");
+const generateBtn = document.getElementById("generate-btn");
+const refreshBtn = document.getElementById("refresh-btn");
+const settingsBtn = document.getElementById("settings-btn");
 
 const settingsModal = document.getElementById("settings-modal");
 const settingsStatus = document.getElementById("settings-status");
 const autoLockInput = document.getElementById("auto-lock-input");
+const hideGraceInput = document.getElementById("hide-grace-input");
 const globalShortcutInput = document.getElementById("global-shortcut-input");
 const captureShortcutBtn = document.getElementById("capture-shortcut-btn");
 const launchAtStartupToggle = document.getElementById("launch-at-startup-toggle");
 const alwaysOnTopToggle = document.getElementById("always-on-top-toggle");
+const statusTimers = new WeakMap();
 
 function setStatus(target, message, level = "") {
   target.textContent = message || "";
   target.className = "status" + (level ? ` ${level}` : "");
+}
+
+function setTransientStatus(target, message, level = "", timeoutMs = 1500) {
+  setStatus(target, message, level);
+  const activeTimer = statusTimers.get(target);
+  if (activeTimer) {
+    clearTimeout(activeTimer);
+  }
+  if (!message) {
+    statusTimers.delete(target);
+    return;
+  }
+  const timer = setTimeout(() => {
+    if (target.textContent === message) {
+      setStatus(target, "", "");
+    }
+    statusTimers.delete(target);
+  }, timeoutMs);
+  statusTimers.set(target, timer);
 }
 
 function normalizeError(error) {
@@ -81,12 +110,44 @@ function keyOf(entry) {
   return `${entry.service}::${entry.username}`;
 }
 
+function selectedEntryFromState() {
+  if (!selectedKey) {
+    return null;
+  }
+  return entries.find((entry) => keyOf(entry) === selectedKey) || null;
+}
+
+function resetPasswordMask() {
+  passwordInput.type = "password";
+  passwordVisibilityBtn.textContent = "👁";
+  passwordVisibilityBtn.setAttribute("aria-label", "显示密码");
+  passwordVisibilityBtn.setAttribute("title", "显示密码");
+}
+
+function applyEntryToForm(entry) {
+  selectedKey = keyOf(entry);
+  serviceInput.value = entry.service;
+  usernameInput.value = entry.username;
+  passwordInput.value = entry.password;
+  notesInput.value = entry.notes || "";
+  resetPasswordMask();
+
+  const date = new Date(entry.updated_at * 1000);
+  entryMeta.textContent = `上次更新: ${date.toLocaleString()}`;
+  updateEditorActions();
+}
+
+function updateEditorActions() {
+  deleteBtn.disabled = !selectedEntryFromState();
+}
+
 function showAuthMode() {
   appPanel.classList.add("hidden");
   authPanel.classList.remove("hidden");
   masterPasswordInput.value = "";
   confirmPasswordInput.value = "";
   selectedKey = "";
+  updateEditorActions();
 
   if (initialized) {
     authTitle.textContent = "解锁保险库";
@@ -112,11 +173,9 @@ function clearForm() {
   passwordInput.value = "";
   notesInput.value = "";
   selectedKey = "";
-  passwordInput.type = "password";
-  passwordVisibilityBtn.textContent = "👁";
-  passwordVisibilityBtn.setAttribute("aria-label", "显示密码");
-  passwordVisibilityBtn.setAttribute("title", "显示密码");
+  resetPasswordMask();
   entryMeta.textContent = "新建条目";
+  updateEditorActions();
 }
 
 function renderEntries() {
@@ -152,18 +211,7 @@ function renderEntries() {
     item.appendChild(service);
     item.appendChild(username);
     item.addEventListener("click", () => {
-      selectedKey = keyOf(entry);
-      serviceInput.value = entry.service;
-      usernameInput.value = entry.username;
-      passwordInput.value = entry.password;
-      notesInput.value = entry.notes || "";
-      passwordInput.type = "password";
-      passwordVisibilityBtn.textContent = "👁";
-      passwordVisibilityBtn.setAttribute("aria-label", "显示密码");
-      passwordVisibilityBtn.setAttribute("title", "显示密码");
-
-      const date = new Date(entry.updated_at * 1000);
-      entryMeta.textContent = `上次更新: ${date.toLocaleString()}`;
+      applyEntryToForm(entry);
       renderEntries();
     });
 
@@ -200,6 +248,7 @@ async function refreshDesktopPrefs() {
   desktopPrefs = Object.assign({}, desktopPrefs, prefs || {});
 
   autoLockInput.value = String(desktopPrefs.auto_lock_minutes || 5);
+  hideGraceInput.value = String(desktopPrefs.hide_grace_minutes ?? 1);
   globalShortcutInput.value = desktopPrefs.global_toggle_shortcut || "Ctrl+Shift+Q";
   launchAtStartupToggle.checked = !!desktopPrefs.launch_at_startup;
   alwaysOnTopToggle.checked = !!desktopPrefs.always_on_top;
@@ -246,7 +295,13 @@ async function loadEntries() {
   const data = await call("list_entries");
   entries = data.entries || [];
   entries.sort((a, b) => a.service.localeCompare(b.service) || a.username.localeCompare(b.username));
+
+  if (selectedKey && !selectedEntryFromState()) {
+    clearForm();
+  }
+
   renderEntries();
+  updateEditorActions();
 }
 
 async function onAuthSubmit(event) {
@@ -309,22 +364,41 @@ async function saveEntry() {
 }
 
 async function deleteEntry() {
-  const service = serviceInput.value.trim();
-  const username = usernameInput.value.trim();
+  const selectedEntry = selectedEntryFromState();
 
-  if (!service || !username) {
+  if (!selectedEntry) {
     setStatus(appStatus, "删除前请先选择一个条目", "error");
     return;
   }
 
   try {
-    await call("delete_entry", { payload: { service, username } });
+    await call("delete_entry", {
+      payload: {
+        service: selectedEntry.service,
+        username: selectedEntry.username,
+      },
+    });
     await loadEntries();
     clearForm();
+    renderEntries();
     setStatus(appStatus, "条目已删除", "ok");
   } catch (error) {
     setStatus(appStatus, error.message, "error");
   }
+}
+
+function revertChanges() {
+  const selectedEntry = selectedEntryFromState();
+  if (selectedEntry) {
+    applyEntryToForm(selectedEntry);
+    renderEntries();
+    setTransientStatus(appStatus, "已撤销修改", "ok", 1500);
+    return;
+  }
+
+  clearForm();
+  renderEntries();
+  setTransientStatus(appStatus, "已清空未保存内容", "ok", 1500);
 }
 
 async function generatePassword() {
@@ -355,9 +429,18 @@ async function saveSettings() {
   setStatus(settingsStatus, "", "");
 
   const autoLockMinutes = Number(autoLockInput.value || 5);
+  const hideGraceMinutes = Number(hideGraceInput.value || 0);
   const globalToggleShortcut = (globalShortcutInput.value || "").trim();
   if (!Number.isFinite(autoLockMinutes) || autoLockMinutes < 1 || autoLockMinutes > 120) {
     setStatus(settingsStatus, "自动锁定时间需在 1 到 120 分钟", "error");
+    return;
+  }
+  if (!Number.isFinite(hideGraceMinutes) || hideGraceMinutes < 0 || hideGraceMinutes > 120) {
+    setStatus(settingsStatus, "免登录时间需在 0 到 120 分钟", "error");
+    return;
+  }
+  if (hideGraceMinutes > autoLockMinutes) {
+    setStatus(settingsStatus, "免登录时间不能超过会话超时时间", "error");
     return;
   }
   if (!globalToggleShortcut) {
@@ -370,16 +453,18 @@ async function saveSettings() {
       payload: {
         always_on_top: !!alwaysOnTopToggle.checked,
         auto_lock_minutes: autoLockMinutes,
+        hide_grace_minutes: hideGraceMinutes,
         global_toggle_shortcut: globalToggleShortcut,
         launch_at_startup: !!launchAtStartupToggle.checked,
       },
     });
     desktopPrefs = Object.assign({}, desktopPrefs, prefs);
     if (prefs.global_shortcut_registered === false && prefs.global_shortcut_error) {
-      setStatus(settingsStatus, prefs.global_shortcut_error, "error");
+      setTransientStatus(appStatus, `设置已保存，但${prefs.global_shortcut_error}`, "error", 1500);
     } else {
-      setStatus(settingsStatus, "设置已保存", "ok");
+      setTransientStatus(appStatus, "设置已保存", "ok", 1500);
     }
+    closeSettingsModal();
   } catch (error) {
     setStatus(settingsStatus, error.message, "error");
   }
@@ -405,13 +490,15 @@ async function boot() {
 
 document.getElementById("auth-form").addEventListener("submit", onAuthSubmit);
 
-document.getElementById("save-btn").addEventListener("click", saveEntry);
-document.getElementById("new-btn").addEventListener("click", () => {
+saveBtn.addEventListener("click", saveEntry);
+newBtn.addEventListener("click", () => {
   clearForm();
-  setStatus(appStatus, "已切换为新建模式", "ok");
+  renderEntries();
+  setTransientStatus(appStatus, "已切换为新建模式", "ok", 1500);
 });
-document.getElementById("delete-btn").addEventListener("click", deleteEntry);
-document.getElementById("generate-btn").addEventListener("click", generatePassword);
+revertBtn.addEventListener("click", revertChanges);
+deleteBtn.addEventListener("click", deleteEntry);
+generateBtn.addEventListener("click", generatePassword);
 
 passwordVisibilityBtn.addEventListener("click", () => {
   const isHidden = passwordInput.type === "password";
@@ -421,16 +508,18 @@ passwordVisibilityBtn.addEventListener("click", () => {
   passwordVisibilityBtn.setAttribute("title", isHidden ? "隐藏密码" : "显示密码");
 });
 
-document.getElementById("refresh-btn").addEventListener("click", async () => {
+refreshBtn.addEventListener("click", async () => {
+  clearForm();
+  renderEntries();
   try {
     await loadEntries();
-    setStatus(appStatus, "条目已刷新", "ok");
+    setTransientStatus(appStatus, "条目已刷新，右侧已清空", "ok", 1500);
   } catch (error) {
     setStatus(appStatus, error.message, "error");
   }
 });
 
-document.getElementById("settings-btn").addEventListener("click", openSettingsModal);
+settingsBtn.addEventListener("click", openSettingsModal);
 document.getElementById("save-settings-btn").addEventListener("click", saveSettings);
 document.getElementById("cancel-settings-btn").addEventListener("click", closeSettingsModal);
 captureShortcutBtn.addEventListener("click", () => {

@@ -391,6 +391,17 @@ textarea {
   filter: brightness(0.97);
 }
 
+.btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  filter: grayscale(0.2);
+}
+
+.btn:disabled:hover {
+  transform: none;
+  filter: grayscale(0.2);
+}
+
 .btn-main {
   color: white;
   background: linear-gradient(120deg, var(--brand), #ff8a45);

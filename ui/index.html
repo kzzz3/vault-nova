@@ -95,6 +95,7 @@
 
           <div class="toolbar">
             <button id="save-btn" class="btn btn-main" type="button">保存条目</button>
+            <button id="revert-btn" class="btn btn-ghost" type="button">撤销修改</button>
             <button id="delete-btn" class="btn btn-danger" type="button">删除当前</button>
             <button id="generate-btn" class="btn btn-alt" type="button">生成密码</button>
           </div>
@@ -114,6 +115,10 @@
         <input id="auto-lock-input" type="number" min="1" max="120" value="5" />
       </label>
       <label>
+        隐藏后免登录时间 (分钟)
+        <input id="hide-grace-input" type="number" min="0" max="120" value="1" />
+      </label>
+      <label>
         全局唤起快捷键
         <div class="shortcut-row">
           <input id="global-shortcut-input" type="text" value="Ctrl+Shift+Q" readonly />
@@ -128,7 +133,7 @@
         <input id="launch-at-startup-toggle" type="checkbox" />
         开机启动 Vault Nova
       </label>
-      <p class="meta">说明: 隐藏窗口后 1 分钟内可免登录恢复，超过 1 分钟或会话超时后需要重新登录。</p>
+      <p class="meta">说明: 隐藏窗口后可在免登录时间内直接恢复，但该时间不能超过会话超时。</p>
       <div class="toolbar">
         <button id="save-settings-btn" class="btn btn-main" type="button">保存设置</button>
         <button id="cancel-settings-btn" class="btn btn-ghost" type="button">关闭</button>

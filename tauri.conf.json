@@ -26,6 +26,9 @@
   },
   "bundle": {
     "active": true,
+    "windows": {
+      "allowDowngrades": false
+    },
     "icon": [
       "icons/icon.ico"
     ]

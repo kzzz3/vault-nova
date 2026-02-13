@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -177,6 +177,7 @@ pub struct PasswordPayload {
 pub struct DesktopPreferencesPayload {
     always_on_top: bool,
     auto_lock_minutes: u64,
+    hide_grace_minutes: u64,
     global_toggle_shortcut: String,
     global_shortcut_registered: bool,
     global_shortcut_error: Option<String>,
@@ -192,6 +193,7 @@ impl DesktopPreferencesPayload {
         Self {
             always_on_top: value.always_on_top,
             auto_lock_minutes: value.auto_lock_minutes,
+            hide_grace_minutes: value.hide_grace_minutes,
             global_toggle_shortcut: value.global_toggle_shortcut.clone(),
             global_shortcut_registered,
             global_shortcut_error,
@@ -204,6 +206,7 @@ impl DesktopPreferencesPayload {
 pub struct SetDesktopPreferencesPayload {
     always_on_top: Option<bool>,
     auto_lock_minutes: Option<u64>,
+    hide_grace_minutes: Option<u64>,
     global_toggle_shortcut: Option<String>,
     launch_at_startup: Option<bool>,
 }
@@ -298,6 +301,24 @@ pub fn set_desktop_preferences(
     state: tauri::State<'_, DesktopShellState>,
     payload: SetDesktopPreferencesPayload,
 ) -> Result<DesktopPreferencesPayload, String> {
+    let current = state.snapshot().map_err(|error| error.to_string())?;
+    let next_auto_lock_minutes = payload
+        .auto_lock_minutes
+        .unwrap_or(current.auto_lock_minutes);
+    let next_hide_grace_minutes = payload
+        .hide_grace_minutes
+        .unwrap_or(current.hide_grace_minutes);
+
+    if !(1..=120).contains(&next_auto_lock_minutes) {
+        return Err("自动锁定时间需在 1 到 120 分钟".to_string());
+    }
+    if next_hide_grace_minutes > 120 {
+        return Err("免登录时间需在 0 到 120 分钟".to_string());
+    }
+    if next_hide_grace_minutes > next_auto_lock_minutes {
+        return Err("免登录时间不能超过会话超时时间".to_string());
+    }
+
     if let Some(shortcut) = payload.global_toggle_shortcut.as_ref() {
         update_global_shortcut(&app, &state, shortcut).map_err(|error| error.to_string())?;
     }
@@ -309,6 +330,9 @@ pub fn set_desktop_preferences(
             }
             if let Some(auto_lock_minutes) = payload.auto_lock_minutes {
                 preferences.auto_lock_minutes = auto_lock_minutes;
+            }
+            if let Some(hide_grace_minutes) = payload.hide_grace_minutes {
+                preferences.hide_grace_minutes = hide_grace_minutes;
             }
             if let Some(shortcut) = payload.global_toggle_shortcut.as_ref() {
                 preferences.global_toggle_shortcut = shortcut.trim().to_string();
@@ -371,6 +395,9 @@ pub fn run(vault_path: PathBuf) -> Result<()> {
             None,
         ))
         .plugin(shortcut_plugin)
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            let _ = summon_main_window(app);
+        }))
         .setup(|app| {
             let handle = app.handle().clone();
             setup_tray(&handle).map_err(|error| anyhow!(error))?;
@@ -411,13 +438,13 @@ pub fn run(vault_path: PathBuf) -> Result<()> {
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let state = window.state::<DesktopShellState>();
-                let _ = state.schedule_hide_grace_lock(60);
+                let _ = schedule_hide_grace_from_prefs(&state);
                 let _ = window.hide();
             }
             WindowEvent::Resized(_) => {
                 if window.is_minimized().unwrap_or(false) {
                     let state = window.state::<DesktopShellState>();
-                    let _ = state.schedule_hide_grace_lock(60);
+                    let _ = schedule_hide_grace_from_prefs(&state);
                     let _ = window.hide();
                 }
             }
@@ -539,7 +566,7 @@ fn toggle_main_visibility(app: &AppHandle) -> Result<bool> {
         .context("failed to inspect visibility")?
     {
         let state = app.state::<DesktopShellState>();
-        let _ = state.schedule_hide_grace_lock(60);
+        let _ = schedule_hide_grace_from_prefs(&state);
         window.hide().context("failed to hide main window")?;
         Ok(false)
     } else {
@@ -600,6 +627,16 @@ fn update_global_shortcut(
 fn main_window(app: &AppHandle) -> Result<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| anyhow!("main window '{MAIN_WINDOW_LABEL}' was not found"))
+}
+
+fn schedule_hide_grace_from_prefs(state: &DesktopShellState) -> Result<()> {
+    let prefs = state.snapshot()?;
+    let minutes = prefs
+        .hide_grace_minutes
+        .min(prefs.auto_lock_minutes)
+        .min(120);
+    let seconds = minutes.saturating_mul(60);
+    state.schedule_hide_grace_lock(seconds)
 }
 
 fn current_timestamp() -> Result<u64> {
