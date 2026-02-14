@@ -178,6 +178,11 @@ pub struct VaultTransferPayload {
     file_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PickVaultPathPayload {
+    hint_path: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct VaultTransferResult {
     file_path: String,
@@ -331,6 +336,26 @@ pub fn import_plain_vault(
         file_path: resolved_path.display().to_string(),
         entries,
     })
+}
+
+#[tauri::command]
+pub fn pick_export_plain_vault_path(payload: PickVaultPathPayload) -> Option<String> {
+    let dialog = rfd::FileDialog::new()
+        .add_filter("JSON", &["json"])
+        .set_file_name("vault-plain.json");
+    let dialog = apply_picker_hint(dialog, payload.hint_path.as_deref(), true);
+    dialog
+        .save_file()
+        .map(|path| path.as_path().display().to_string())
+}
+
+#[tauri::command]
+pub fn pick_import_plain_vault_path(payload: PickVaultPathPayload) -> Option<String> {
+    let dialog = rfd::FileDialog::new().add_filter("JSON", &["json"]);
+    let dialog = apply_picker_hint(dialog, payload.hint_path.as_deref(), false);
+    dialog
+        .pick_file()
+        .map(|path| path.as_path().display().to_string())
 }
 
 #[tauri::command]
@@ -511,6 +536,8 @@ pub fn run(vault_path: PathBuf) -> Result<()> {
             generate_password,
             export_plain_vault,
             import_plain_vault,
+            pick_export_plain_vault_path,
+            pick_import_plain_vault_path,
             get_desktop_preferences,
             set_desktop_preferences,
         ])
@@ -680,6 +707,37 @@ fn update_global_shortcut(
 fn main_window(app: &AppHandle) -> Result<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| anyhow!("main window '{MAIN_WINDOW_LABEL}' was not found"))
+}
+
+fn apply_picker_hint(
+    mut dialog: rfd::FileDialog,
+    hint_path: Option<&str>,
+    include_file_name: bool,
+) -> rfd::FileDialog {
+    let Some(raw_hint) = hint_path.map(str::trim).filter(|value| !value.is_empty()) else {
+        return dialog;
+    };
+
+    let hint = PathBuf::from(raw_hint);
+    if hint.is_absolute() {
+        if hint.is_dir() {
+            dialog = dialog.set_directory(&hint);
+        } else if let Some(parent) = hint.parent().filter(|path| !path.as_os_str().is_empty()) {
+            dialog = dialog.set_directory(parent);
+        }
+    }
+
+    if include_file_name {
+        if let Some(file_name) = hint
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+        {
+            dialog = dialog.set_file_name(file_name);
+        }
+    }
+
+    dialog
 }
 
 fn schedule_hide_grace_from_prefs(state: &DesktopShellState) -> Result<()> {

@@ -123,12 +123,24 @@ function rememberTransferPath(path) {
   }
 }
 
-function promptTransferPath(promptText) {
-  const raw = window.prompt(promptText, transferPathHint);
-  if (raw === null) {
+async function pickTransferPath(kind) {
+  const command = kind === "export" ? "pick_export_plain_vault_path" : "pick_import_plain_vault_path";
+  const picked = await call(command, {
+    payload: {
+      hint_path: transferPathHint,
+    },
+  });
+
+  if (!picked || typeof picked !== "string") {
     return "";
   }
-  return raw.trim();
+
+  const normalized = picked.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized;
 }
 
 async function call(command, payload = {}) {
@@ -459,7 +471,7 @@ async function generatePassword() {
 }
 
 async function exportPlainVault() {
-  const filePath = promptTransferPath("请输入导出 JSON 文件路径（相对路径会保存到金库目录）");
+  const filePath = await pickTransferPath("export");
   if (!filePath) {
     return;
   }
@@ -477,7 +489,7 @@ async function exportPlainVault() {
 }
 
 async function importPlainVault() {
-  const filePath = promptTransferPath("请输入导入 JSON 文件路径（会覆盖当前金库）");
+  const filePath = await pickTransferPath("import");
   if (!filePath) {
     return;
   }
