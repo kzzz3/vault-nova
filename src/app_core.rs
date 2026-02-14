@@ -1,15 +1,38 @@
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow, bail};
-use serde::Serialize;
+use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::password;
 use crate::vault::{self, Entry};
 
 const DEFAULT_SESSION_TTL_SECONDS: u64 = 5 * 60;
+const PLAIN_VAULT_FORMAT: &str = "vault-nova-plain-v1";
+
+#[derive(Debug, Serialize)]
+struct PlainVaultFile {
+    format: String,
+    exported_at: u64,
+    entries: Vec<Entry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlainVaultImportFile {
+    format: Option<String>,
+    entries: Vec<Entry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PlainVaultImport {
+    File(PlainVaultImportFile),
+    Entries(Vec<Entry>),
+}
 
 pub struct AppCore {
     vault_path: PathBuf,
@@ -246,6 +269,85 @@ impl AppCore {
         password::generate_password(length, include_numbers, include_symbols)
     }
 
+    pub fn export_plain_json(&self, path: PathBuf) -> Result<(PathBuf, usize)> {
+        let resolved_path = self.resolve_transfer_path(&path);
+
+        let entries_len = self.with_master_password(|master_password| {
+            let mut unlocked = vault::open(&self.vault_path, master_password)?;
+            unlocked.data.entries.sort_by(|left, right| {
+                left.service
+                    .cmp(&right.service)
+                    .then(left.username.cmp(&right.username))
+            });
+
+            let plain = PlainVaultFile {
+                format: PLAIN_VAULT_FORMAT.to_string(),
+                exported_at: current_timestamp()?,
+                entries: unlocked.data.entries,
+            };
+
+            let serialized = serde_json::to_vec_pretty(&plain)
+                .context("failed to serialize plain vault file")?;
+            if let Some(parent) = resolved_path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("failed to create export directory {}", parent.display())
+                    })?;
+                }
+            }
+            fs::write(&resolved_path, serialized).with_context(|| {
+                format!(
+                    "failed to write exported vault at {}",
+                    resolved_path.display()
+                )
+            })?;
+
+            Ok(plain.entries.len())
+        })?;
+
+        Ok((resolved_path, entries_len))
+    }
+
+    pub fn import_plain_json(&self, path: PathBuf) -> Result<(PathBuf, usize)> {
+        let resolved_path = self.resolve_transfer_path(&path);
+        let raw = fs::read(&resolved_path).with_context(|| {
+            format!("failed to read import file at {}", resolved_path.display())
+        })?;
+
+        let imported = serde_json::from_slice::<PlainVaultImport>(&raw)
+            .context("plain vault JSON format is invalid")?;
+
+        let entries = match imported {
+            PlainVaultImport::File(file) => {
+                if let Some(format) = file.format.as_deref() {
+                    if format != PLAIN_VAULT_FORMAT {
+                        bail!(
+                            "unsupported plain vault format '{format}', expected '{PLAIN_VAULT_FORMAT}'"
+                        )
+                    }
+                }
+                file.entries
+            }
+            PlainVaultImport::Entries(entries) => entries,
+        };
+
+        let normalized_entries = normalize_import_entries(entries)?;
+        let imported_len = normalized_entries.len();
+
+        self.with_master_password(|master_password| {
+            let mut unlocked = vault::open(&self.vault_path, master_password)?;
+            unlocked.data.entries = normalized_entries;
+            vault::save(
+                &self.vault_path,
+                master_password,
+                &unlocked.salt,
+                &unlocked.data,
+            )
+        })?;
+
+        Ok((resolved_path, imported_len))
+    }
+
     fn set_session(&self, master_password: String) -> Result<()> {
         let ttl = self.session_ttl_seconds()?;
         let expires_at = current_timestamp()? + ttl;
@@ -267,6 +369,17 @@ impl AppCore {
 
     fn ensure_unlocked(&self) -> Result<()> {
         self.with_master_password(|_| Ok(()))
+    }
+
+    fn resolve_transfer_path(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            return path.to_path_buf();
+        }
+
+        match self.vault_path.parent() {
+            Some(parent) => parent.join(path),
+            None => PathBuf::from(path),
+        }
     }
 
     fn with_master_password<T>(&self, f: impl FnOnce(&str) -> Result<T>) -> Result<T> {
@@ -310,8 +423,40 @@ fn current_timestamp() -> Result<u64> {
         .as_secs())
 }
 
+fn normalize_import_entries(entries: Vec<Entry>) -> Result<Vec<Entry>> {
+    let now = current_timestamp()?;
+    let mut deduped = BTreeMap::<(String, String), Entry>::new();
+
+    for mut entry in entries {
+        entry.service = entry.service.trim().to_string();
+        entry.username = entry.username.trim().to_string();
+
+        if entry.service.is_empty() || entry.username.is_empty() || entry.password.is_empty() {
+            bail!("imported entries must include non-empty service, username and password")
+        }
+
+        entry.notes = entry.notes.and_then(|notes| {
+            let trimmed = notes.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+
+        if entry.updated_at == 0 {
+            entry.updated_at = now;
+        }
+
+        deduped.insert((entry.service.clone(), entry.username.clone()), entry);
+    }
+
+    Ok(deduped.into_values().collect())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     use tempfile::tempdir;
@@ -390,5 +535,62 @@ mod tests {
 
         let result = app.unlock("wrong-pass".to_string());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn export_and_import_plain_json_work() {
+        let (dir, path) = vault_path();
+        let app = AppCore::new(path);
+        app.setup("master-pass".to_string(), "master-pass".to_string())
+            .expect("setup should work");
+
+        app.upsert_entry(
+            "github".to_string(),
+            "alice".to_string(),
+            "secret-1".to_string(),
+            Some("otp".to_string()),
+        )
+        .expect("upsert should work");
+
+        let export_rel = PathBuf::from("backup/plain-vault.json");
+        let (exported_path, exported_count) = app
+            .export_plain_json(export_rel)
+            .expect("plain export should work");
+        assert_eq!(exported_count, 1);
+
+        let exported_raw =
+            fs::read_to_string(&exported_path).expect("export file should be readable");
+        assert!(exported_raw.contains("vault-nova-plain-v1"));
+        assert!(exported_raw.contains("secret-1"));
+
+        let import_path = dir.path().join("import.json");
+        fs::write(
+            &import_path,
+            r#"{
+  "format": "vault-nova-plain-v1",
+  "exported_at": 1,
+  "entries": [
+    {
+      "service": "gitlab",
+      "username": "bob",
+      "password": "secret-2",
+      "notes": "from import",
+      "updated_at": 2
+    }
+  ]
+}"#,
+        )
+        .expect("import file should be written");
+
+        let (_imported_path, imported_count) = app
+            .import_plain_json(import_path)
+            .expect("plain import should work");
+        assert_eq!(imported_count, 1);
+
+        let entries = app.list_entries().expect("list should work after import");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].service, "gitlab");
+        assert_eq!(entries[0].username, "bob");
+        assert_eq!(entries[0].password, "secret-2");
     }
 }

@@ -49,6 +49,8 @@ const deleteBtn = document.getElementById("delete-btn");
 const generateBtn = document.getElementById("generate-btn");
 const refreshBtn = document.getElementById("refresh-btn");
 const settingsBtn = document.getElementById("settings-btn");
+const exportJsonBtn = document.getElementById("export-json-btn");
+const importJsonBtn = document.getElementById("import-json-btn");
 
 const settingsModal = document.getElementById("settings-modal");
 const settingsStatus = document.getElementById("settings-status");
@@ -59,6 +61,16 @@ const captureShortcutBtn = document.getElementById("capture-shortcut-btn");
 const launchAtStartupToggle = document.getElementById("launch-at-startup-toggle");
 const alwaysOnTopToggle = document.getElementById("always-on-top-toggle");
 const statusTimers = new WeakMap();
+const TRANSFER_PATH_CACHE_KEY = "vaultNovaPlainTransferPath";
+let transferPathHint = "vault-plain.json";
+
+try {
+  const cached = window.localStorage.getItem(TRANSFER_PATH_CACHE_KEY);
+  if (cached && cached.trim()) {
+    transferPathHint = cached.trim();
+  }
+} catch (_) {
+}
 
 function setStatus(target, message, level = "") {
   target.textContent = message || "";
@@ -96,6 +108,27 @@ function normalizeError(error) {
   } catch (_) {
     return "操作失败";
   }
+}
+
+function rememberTransferPath(path) {
+  const trimmed = (path || "").trim();
+  if (!trimmed) {
+    return;
+  }
+
+  transferPathHint = trimmed;
+  try {
+    window.localStorage.setItem(TRANSFER_PATH_CACHE_KEY, trimmed);
+  } catch (_) {
+  }
+}
+
+function promptTransferPath(promptText) {
+  const raw = window.prompt(promptText, transferPathHint);
+  if (raw === null) {
+    return "";
+  }
+  return raw.trim();
 }
 
 async function call(command, payload = {}) {
@@ -425,6 +458,50 @@ async function generatePassword() {
   }
 }
 
+async function exportPlainVault() {
+  const filePath = promptTransferPath("请输入导出 JSON 文件路径（相对路径会保存到金库目录）");
+  if (!filePath) {
+    return;
+  }
+
+  try {
+    const result = await call("export_plain_vault", { payload: { file_path: filePath } });
+    rememberTransferPath(filePath);
+    setTransientStatus(appStatus, `已导出 ${result.entries} 条到 ${result.file_path}`, "ok", 2200);
+  } catch (error) {
+    setStatus(appStatus, error.message, "error");
+    if (error.message.includes("locked") || error.message.includes("expired")) {
+      showAuthMode();
+    }
+  }
+}
+
+async function importPlainVault() {
+  const filePath = promptTransferPath("请输入导入 JSON 文件路径（会覆盖当前金库）");
+  if (!filePath) {
+    return;
+  }
+
+  const confirmed = window.confirm("导入会覆盖当前金库所有条目，确定继续吗？");
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const result = await call("import_plain_vault", { payload: { file_path: filePath } });
+    rememberTransferPath(filePath);
+    clearForm();
+    await loadEntries();
+    renderEntries();
+    setTransientStatus(appStatus, `已导入 ${result.entries} 条，来源 ${result.file_path}`, "ok", 2200);
+  } catch (error) {
+    setStatus(appStatus, error.message, "error");
+    if (error.message.includes("locked") || error.message.includes("expired")) {
+      showAuthMode();
+    }
+  }
+}
+
 async function saveSettings() {
   setStatus(settingsStatus, "", "");
 
@@ -520,6 +597,8 @@ refreshBtn.addEventListener("click", async () => {
 });
 
 settingsBtn.addEventListener("click", openSettingsModal);
+exportJsonBtn.addEventListener("click", exportPlainVault);
+importJsonBtn.addEventListener("click", importPlainVault);
 document.getElementById("save-settings-btn").addEventListener("click", saveSettings);
 document.getElementById("cancel-settings-btn").addEventListener("click", closeSettingsModal);
 captureShortcutBtn.addEventListener("click", () => {

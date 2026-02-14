@@ -173,6 +173,17 @@ pub struct PasswordPayload {
     password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct VaultTransferPayload {
+    file_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VaultTransferResult {
+    file_path: String,
+    entries: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DesktopPreferencesPayload {
     always_on_top: bool,
@@ -280,6 +291,46 @@ pub fn generate_password(
         .generate_password(length, include_numbers, include_symbols)
         .map_err(|error| error.to_string())?;
     Ok(PasswordPayload { password })
+}
+
+#[tauri::command]
+pub fn export_plain_vault(
+    state: tauri::State<'_, AppCore>,
+    payload: VaultTransferPayload,
+) -> Result<VaultTransferResult, String> {
+    let path = payload.file_path.trim();
+    if path.is_empty() {
+        return Err("导出路径不能为空".to_string());
+    }
+
+    let (resolved_path, entries) = state
+        .export_plain_json(PathBuf::from(path))
+        .map_err(|error| error.to_string())?;
+
+    Ok(VaultTransferResult {
+        file_path: resolved_path.display().to_string(),
+        entries,
+    })
+}
+
+#[tauri::command]
+pub fn import_plain_vault(
+    state: tauri::State<'_, AppCore>,
+    payload: VaultTransferPayload,
+) -> Result<VaultTransferResult, String> {
+    let path = payload.file_path.trim();
+    if path.is_empty() {
+        return Err("导入路径不能为空".to_string());
+    }
+
+    let (resolved_path, entries) = state
+        .import_plain_json(PathBuf::from(path))
+        .map_err(|error| error.to_string())?;
+
+    Ok(VaultTransferResult {
+        file_path: resolved_path.display().to_string(),
+        entries,
+    })
 }
 
 #[tauri::command]
@@ -458,6 +509,8 @@ pub fn run(vault_path: PathBuf) -> Result<()> {
             upsert_entry,
             delete_entry,
             generate_password,
+            export_plain_vault,
+            import_plain_vault,
             get_desktop_preferences,
             set_desktop_preferences,
         ])
