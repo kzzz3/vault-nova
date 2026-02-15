@@ -360,9 +360,21 @@ pub fn pick_import_plain_vault_path(payload: PickVaultPathPayload) -> Option<Str
 
 #[tauri::command]
 pub fn get_desktop_preferences(
+    app: AppHandle,
     state: tauri::State<'_, DesktopShellState>,
 ) -> Result<DesktopPreferencesPayload, String> {
-    let prefs = state.snapshot().map_err(|error| error.to_string())?;
+    let mut prefs = state.snapshot().map_err(|error| error.to_string())?;
+
+    if let Ok(actual) = query_launch_at_startup_state(&app) {
+        if prefs.launch_at_startup != actual {
+            prefs = state
+                .update(|preferences| {
+                    preferences.launch_at_startup = actual;
+                })
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
     let (registered, error) = state
         .shortcut_feedback()
         .map_err(|error| error.to_string())?;
@@ -399,7 +411,7 @@ pub fn set_desktop_preferences(
         update_global_shortcut(&app, &state, shortcut).map_err(|error| error.to_string())?;
     }
 
-    let prefs = state
+    let mut prefs = state
         .update(|preferences| {
             if let Some(always_on_top) = payload.always_on_top {
                 preferences.always_on_top = always_on_top;
@@ -427,18 +439,26 @@ pub fn set_desktop_preferences(
     }
 
     if let Some(launch_at_startup) = payload.launch_at_startup {
-        let is_enabled = app
-            .autolaunch()
-            .is_enabled()
+        let actual = apply_launch_at_startup_preference(&app, launch_at_startup)
             .map_err(|error| error.to_string())?;
 
-        if launch_at_startup && !is_enabled {
-            app.autolaunch()
-                .enable()
+        if prefs.launch_at_startup != actual {
+            prefs = state
+                .update(|preferences| {
+                    preferences.launch_at_startup = actual;
+                })
                 .map_err(|error| error.to_string())?;
-        } else if !launch_at_startup && is_enabled {
-            app.autolaunch()
-                .disable()
+        }
+
+        if actual != launch_at_startup {
+            return Err("开机启动状态未生效，请检查系统权限后重试".to_string());
+        }
+    } else if let Ok(actual) = query_launch_at_startup_state(&app) {
+        if prefs.launch_at_startup != actual {
+            prefs = state
+                .update(|preferences| {
+                    preferences.launch_at_startup = actual;
+                })
                 .map_err(|error| error.to_string())?;
         }
     }
@@ -484,10 +504,16 @@ pub fn run(vault_path: PathBuf) -> Result<()> {
             app_core
                 .set_session_timeout_minutes(prefs.auto_lock_minutes)
                 .map_err(|error| anyhow!(error))?;
-            if prefs.launch_at_startup {
-                let _ = handle.autolaunch().enable();
-            } else {
-                let _ = handle.autolaunch().disable();
+            match apply_launch_at_startup_preference(&handle, prefs.launch_at_startup) {
+                Ok(actual) if actual != prefs.launch_at_startup => {
+                    let _ = state.update(|preferences| {
+                        preferences.launch_at_startup = actual;
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("Failed to apply autostart preference: {error:#}");
+                }
             }
             if let Err(error) =
                 update_global_shortcut(&handle, &state, &prefs.global_toggle_shortcut)
@@ -707,6 +733,27 @@ fn update_global_shortcut(
 fn main_window(app: &AppHandle) -> Result<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| anyhow!("main window '{MAIN_WINDOW_LABEL}' was not found"))
+}
+
+fn query_launch_at_startup_state(app: &AppHandle) -> Result<bool> {
+    app.autolaunch()
+        .is_enabled()
+        .context("failed to query launch-at-startup status")
+}
+
+fn apply_launch_at_startup_preference(app: &AppHandle, enabled: bool) -> Result<bool> {
+    let is_enabled = query_launch_at_startup_state(app)?;
+    if enabled && !is_enabled {
+        app.autolaunch()
+            .enable()
+            .context("failed to enable launch-at-startup")?;
+    } else if !enabled && is_enabled {
+        app.autolaunch()
+            .disable()
+            .context("failed to disable launch-at-startup")?;
+    }
+
+    query_launch_at_startup_state(app)
 }
 
 fn apply_picker_hint(
