@@ -205,6 +205,8 @@ function showAuthMode() {
     confirmWrap.classList.remove("hidden");
     authSubmit.textContent = "创建并解锁";
   }
+
+  masterPasswordInput.focus();
 }
 
 function showAppMode() {
