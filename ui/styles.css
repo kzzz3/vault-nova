@@ -247,6 +247,15 @@ button {
   font: inherit;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.entry-item:focus-visible {
+  outline: 3px solid rgba(32, 125, 121, 0.35);
+  outline-offset: 2px;
+}
+
 input,
 select,
 textarea {
@@ -304,7 +313,7 @@ textarea {
 
 .password-field input {
   width: 100%;
-  padding-right: 46px;
+  padding-right: 86px;
 }
 
 .password-visibility-btn {
@@ -324,6 +333,24 @@ textarea {
 
 .password-visibility-btn:hover {
   color: rgba(23, 40, 47, 0.9);
+}
+
+.password-copy-btn {
+  position: absolute;
+  right: 38px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 6px;
+  padding: 3px 5px;
+  background: rgba(32, 125, 121, 0.1);
+  color: var(--aqua);
+  cursor: pointer;
+  font-size: 0.74rem;
+}
+
+.password-copy-btn:hover {
+  background: rgba(32, 125, 121, 0.18);
 }
 
 .toolbar {
@@ -407,6 +434,10 @@ textarea {
   background: linear-gradient(120deg, var(--brand), #ff8a45);
 }
 
+.btn-main.has-changes {
+  box-shadow: 0 0 0 3px rgba(241, 93, 79, 0.18);
+}
+
 .btn-alt {
   color: white;
   background: linear-gradient(120deg, var(--aqua), #2a6da0);
@@ -477,4 +508,55 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .hero {
+    align-items: flex-start;
+  }
+
+  .session-pill {
+    white-space: nowrap;
+  }
+
+  .sidebar,
+  .editor {
+    padding: 12px;
+  }
+
+}
+
+@media (max-width: 560px) {
+  .shell {
+    padding: 14px 10px 18px;
+    gap: 10px;
+  }
+
+  .hero {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .hero p {
+    font-size: 0.88rem;
+  }
+
+  .session-pill {
+    align-self: flex-start;
+  }
+
+  .toolbar .btn {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 110px;
+  }
+
+  .notes-wrap textarea {
+    min-height: 150px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

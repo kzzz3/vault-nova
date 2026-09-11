@@ -1,5 +1,5 @@
-use std::fs;
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -146,9 +146,46 @@ pub fn save(path: &Path, master_password: &str, salt: &[u8], data: &VaultData) -
             })?;
         }
     }
-    fs::write(path, serialized)
-        .with_context(|| format!("failed to write vault file at {}", path.display()))?;
-    Ok(())
+    let temp_path = temporary_path(path);
+    let result = (|| -> Result<()> {
+        use std::io::Write;
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+            .with_context(|| {
+                format!(
+                    "failed to create temporary vault file at {}",
+                    temp_path.display()
+                )
+            })?;
+        file.write_all(&serialized)
+            .context("failed to write temporary vault file")?;
+        file.sync_all()
+            .context("failed to flush temporary vault file")?;
+        drop(file);
+        if path.exists() {
+            fs::remove_file(path)
+                .with_context(|| format!("failed to replace vault file at {}", path.display()))?;
+        }
+        fs::rename(&temp_path, path)
+            .with_context(|| format!("failed to install vault file at {}", path.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let mut temp = path.to_path_buf();
+    let extension = temp
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("vault");
+    temp.set_extension(format!("{extension}.tmp-{}", std::process::id()));
+    temp
 }
 
 fn derive_key(master_password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN]> {

@@ -19,6 +19,8 @@ let desktopPrefs = {
 };
 let capturingShortcut = false;
 let sessionDeadlineMs = null;
+let busy = false;
+let formSnapshot = "";
 
 const authPanel = document.getElementById("auth-panel");
 const appPanel = document.getElementById("app-panel");
@@ -38,6 +40,7 @@ const serviceInput = document.getElementById("service-input");
 const usernameInput = document.getElementById("username-input");
 const passwordInput = document.getElementById("password-input");
 const passwordVisibilityBtn = document.getElementById("password-visibility-btn");
+const passwordCopyBtn = document.getElementById("password-copy-btn");
 const notesInput = document.getElementById("notes-input");
 const entryList = document.getElementById("entry-list");
 const lengthInput = document.getElementById("length-input");
@@ -179,11 +182,45 @@ function applyEntryToForm(entry) {
 
   const date = new Date(entry.updated_at * 1000);
   entryMeta.textContent = `上次更新: ${date.toLocaleString()}`;
+  syncFormSnapshot();
   updateEditorActions();
 }
 
+function currentFormSnapshot() {
+  return JSON.stringify({
+    service: serviceInput.value,
+    username: usernameInput.value,
+    password: passwordInput.value,
+    notes: notesInput.value,
+  });
+}
+
+function syncFormSnapshot() {
+  formSnapshot = currentFormSnapshot();
+}
+
+function hasUnsavedChanges() {
+  return currentFormSnapshot() !== formSnapshot;
+}
+
+function confirmDiscardChanges() {
+  return !hasUnsavedChanges() || window.confirm("当前条目有未保存修改，确定放弃吗？");
+}
+
+function setBusy(nextBusy, label = "") {
+  busy = nextBusy;
+  [saveBtn, deleteBtn, generateBtn, refreshBtn, newBtn, exportJsonBtn, importJsonBtn].forEach((button) => {
+    button.disabled = nextBusy || (button === deleteBtn && !selectedEntryFromState());
+  });
+  if (nextBusy && label) setTransientStatus(appStatus, label, "", 30000);
+}
+
 function updateEditorActions() {
-  deleteBtn.disabled = !selectedEntryFromState();
+  deleteBtn.disabled = busy || !selectedEntryFromState();
+  saveBtn.classList.toggle("has-changes", hasUnsavedChanges());
+  if (selectedEntryFromState() && hasUnsavedChanges()) {
+    entryMeta.textContent = "有未保存修改";
+  }
 }
 
 function showAuthMode() {
@@ -222,6 +259,7 @@ function clearForm() {
   selectedKey = "";
   resetPasswordMask();
   entryMeta.textContent = "新建条目";
+  syncFormSnapshot();
   updateEditorActions();
 }
 
@@ -258,6 +296,7 @@ function renderEntries() {
     item.appendChild(service);
     item.appendChild(username);
     item.addEventListener("click", () => {
+      if (!confirmDiscardChanges()) return;
       applyEntryToForm(entry);
       renderEntries();
     });
@@ -384,6 +423,7 @@ async function onAuthSubmit(event) {
 }
 
 async function saveEntry() {
+  if (busy) return;
   const payload = {
     service: serviceInput.value.trim(),
     username: usernameInput.value.trim(),
@@ -396,6 +436,7 @@ async function saveEntry() {
     return;
   }
 
+  setBusy(true, "正在保存...");
   try {
     await call("upsert_entry", { payload });
     await loadEntries();
@@ -407,6 +448,8 @@ async function saveEntry() {
     if (error.message.includes("locked") || error.message.includes("expired")) {
       showAuthMode();
     }
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -418,6 +461,9 @@ async function deleteEntry() {
     return;
   }
 
+  if (!window.confirm(`确定删除“${selectedEntry.service} / ${selectedEntry.username}”吗？此操作不可撤销。`)) return;
+
+  setBusy(true, "正在删除...");
   try {
     await call("delete_entry", {
       payload: {
@@ -431,6 +477,8 @@ async function deleteEntry() {
     setStatus(appStatus, "条目已删除", "ok");
   } catch (error) {
     setStatus(appStatus, error.message, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -449,6 +497,7 @@ function revertChanges() {
 }
 
 async function generatePassword() {
+  if (busy) return;
   const length = Number(lengthInput.value || 16);
   if (!Number.isFinite(length) || length < 8 || length > 128) {
     setStatus(appStatus, "长度必须在 8 到 128 之间", "error");
@@ -459,6 +508,7 @@ async function generatePassword() {
   const includeNumbers = type !== "letters_only";
   const includeSymbols = type === "letters_numbers_symbols";
 
+  setBusy(true, "正在生成密码...");
   try {
     const data = await call("generate_password", {
       length,
@@ -469,6 +519,8 @@ async function generatePassword() {
     setStatus(appStatus, "已生成新密码", "ok");
   } catch (error) {
     setStatus(appStatus, error.message, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -583,6 +635,7 @@ document.getElementById("auth-form").addEventListener("submit", onAuthSubmit);
 
 saveBtn.addEventListener("click", saveEntry);
 newBtn.addEventListener("click", () => {
+  if (!confirmDiscardChanges()) return;
   clearForm();
   renderEntries();
   setTransientStatus(appStatus, "已切换为新建模式", "ok", 1500);
@@ -600,13 +653,32 @@ passwordVisibilityBtn.addEventListener("click", () => {
 });
 
 refreshBtn.addEventListener("click", async () => {
+  if (!confirmDiscardChanges()) return;
+  if (busy) return;
   clearForm();
   renderEntries();
+  setBusy(true, "正在刷新...");
   try {
     await loadEntries();
     setTransientStatus(appStatus, "条目已刷新，右侧已清空", "ok", 1500);
   } catch (error) {
     setStatus(appStatus, error.message, "error");
+  } finally {
+    setBusy(false);
+  }
+});
+
+passwordCopyBtn.addEventListener("click", async () => {
+  const password = passwordInput.value;
+  if (!password) {
+    setStatus(appStatus, "当前没有可复制的密码", "error");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(password);
+    setTransientStatus(appStatus, "密码已复制到剪贴板（请及时清除）", "ok", 2200);
+  } catch (_) {
+    setStatus(appStatus, "复制失败，请检查系统剪贴板权限", "error");
   }
 });
 
@@ -628,6 +700,10 @@ settingsModal.addEventListener("click", (event) => {
 });
 
 searchInput.addEventListener("input", renderEntries);
+
+[serviceInput, usernameInput, passwordInput, notesInput].forEach((input) => {
+  input.addEventListener("input", updateEditorActions);
+});
 
 document.addEventListener("keydown", (event) => {
   if (capturingShortcut && !settingsModal.classList.contains("hidden")) {
